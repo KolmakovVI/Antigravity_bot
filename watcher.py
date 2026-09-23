@@ -82,11 +82,12 @@ class ConversationWatcher:
         initial_step_count: int,
         on_progress: Optional[Callable[[str], Awaitable[None]]] = None,
         timeout: int = 300,
-        poll_interval: float = 0.8
+        poll_interval: float = 0.8,
+        cancel_event: Optional[asyncio.Event] = None
     ) -> Optional[str]:
         """
         Poll transcript.jsonl and Antigravity status until the agent finishes responding.
-        Returns the final PLANNER_RESPONSE text or None if execution failed.
+        Returns the final PLANNER_RESPONSE text, '__STOPPED__' if cancelled, or None if execution failed.
         """
         transcript_path = self.bridge.get_transcript_path(conversation_id)
         start_time = time.time()
@@ -95,6 +96,9 @@ class ConversationWatcher:
         saw_running = False
 
         while time.time() - start_time < timeout:
+            if cancel_event and cancel_event.is_set():
+                return "__STOPPED__"
+
             elapsed = time.time() - start_time
             status = self.bridge.get_chat_status(conversation_id)
             if status == "RUNNING":
@@ -111,19 +115,28 @@ class ConversationWatcher:
                         for item in lines[initial_step_count:]:
                             t = item.get("type")
                             content = item.get("content", "")
+                            tool_calls = item.get("tool_calls", [])
                             
-                            if t == "PLANNER_RESPONSE" and content.strip():
-                                last_response_text = content.strip()
-
-                            elif t in ("GENERIC", "CHECKPOINT") and on_progress:
-                                tool_calls = item.get("tool_calls", [])
-                                if tool_calls:
+                            # PLANNER_RESPONSE can contain tool calls, text response, or both
+                            if t == "PLANNER_RESPONSE":
+                                if tool_calls and on_progress:
                                     t_names = ", ".join(f"`{tc.get('name')}`" for tc in tool_calls if tc.get('name'))
                                     progress_msg = f"🛠 Выполняю инструмент: {t_names}..."
                                     if progress_msg != last_reported_tool:
                                         last_reported_tool = progress_msg
                                         await on_progress(progress_msg)
-                except Exception as e:
+                                
+                                if content.strip():
+                                    last_response_text = content.strip()
+
+                            elif t in ("GENERIC", "CHECKPOINT") and on_progress:
+                                if tool_calls:
+                                    t_names = ", ".join(f"`{tc.get('name')}`" for tc in tool_calls if tc.get('name'))
+                                    progress_msg = f"🛠 Выполняю: {t_names}..."
+                                    if progress_msg != last_reported_tool:
+                                        last_reported_tool = progress_msg
+                                        await on_progress(progress_msg)
+                except Exception:
                     pass
 
             # Check termination conditions

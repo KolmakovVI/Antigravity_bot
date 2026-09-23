@@ -21,7 +21,15 @@ class TestAntigravityBotBridge(unittest.TestCase):
         self.assertIn("id", p)
         self.assertIn("name", p)
         self.assertIn("folders", p)
-        print(f"Verified {len(projects)} projects: {[p['name'] for p in projects[:5]]}")
+        self.assertIn("last_active", p)
+        # Verify descending order by last_active
+        for i in range(len(projects) - 1):
+            self.assertGreaterEqual(
+                projects[i].get("last_active", 0),
+                projects[i + 1].get("last_active", 0),
+                f"Projects not ordered by recency: {projects[i]['name']} vs {projects[i+1]['name']}"
+            )
+        print(f"Verified {len(projects)} projects (ordered by recency): {[p['name'] for p in projects[:5]]}")
 
     def test_list_chats(self):
         chats = self.bridge.list_chats()
@@ -60,5 +68,26 @@ class TestAntigravityBotBridge(unittest.TestCase):
             if "```" in c:
                 self.assertEqual(c.count("```") % 2, 0, f"Unclosed code fence in chunk: {c}")
 
+    def test_image_helpers(self):
+        chats = self.bridge.list_chats()
+        top_chat_id = chats[0]["id"]
+        dummy_data = b"dummy_png_bytes_123"
+        saved_path = self.bridge.save_uploaded_image(top_chat_id, dummy_data, filename="test_helper_img.png")
+        self.assertTrue(saved_path.exists())
+        self.assertEqual(saved_path.read_bytes(), dummy_data)
+        
+        payload = self.bridge.build_image_payload(saved_path, dummy_data, mime_type="image/png")
+        self.assertIn("base64Data", payload)
+        self.assertIn("mimeType", payload)
+        self.assertEqual(payload["mimeType"], "image/png")
+        self.assertIn("uri", payload)
+        # Cleanup test file
+        try:
+            saved_path.unlink()
+        except Exception:
+            pass
+        print("Verified image helpers: save_uploaded_image & build_image_payload OK.")
+
 if __name__ == "__main__":
     unittest.main()
+

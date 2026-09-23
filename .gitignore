@@ -29,3 +29,7 @@ htmlcov/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Graphify local cache
+graphify-out/cache/
+graphify-out/.graphify_root

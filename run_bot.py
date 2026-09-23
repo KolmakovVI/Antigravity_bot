@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import os
 import asyncio
 from pathlib import Path
@@ -69,10 +69,17 @@ def main():
     # 3. Start Bot
     print("\n🚀 Запуск Telegram бота...")
     from bot import start_bot
-    try:
-        asyncio.run(start_bot())
-    except (KeyboardInterrupt, SystemExit):
-        print("\n🛑 Бот остановлен пользователем.")
+    import time
+    while True:
+        try:
+            asyncio.run(start_bot())
+            break
+        except (KeyboardInterrupt, SystemExit):
+            print("\n🛑 Бот остановлен пользователем.")
+            break
+        except Exception as e:
+            print(f"\n⚠️ Ошибка в боте: {e}. Перезапуск через 5 сек...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()

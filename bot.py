@@ -1,7 +1,9 @@
+import io
 import sys
 import asyncio
 import logging
-from typing import Optional, Dict, Any
+from pathlib import Path
+from typing import Optional, Dict, Any, List
 
 # Fix Windows console UTF-8 encoding for emojis
 if hasattr(sys.stdout, "reconfigure"):
@@ -27,7 +29,7 @@ from aiogram.types import (
     BotCommandScopeDefault,
     MenuButtonCommands,
 )
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 import config
 import log_config
@@ -56,6 +58,9 @@ def get_user_session(user_id: int) -> Dict[str, Any]:
         }
     return user_sessions[user_id]
 
+# Active cancellations tracking
+active_cancellations: Dict[str, asyncio.Event] = {}
+
 # Initialize bridge & watcher
 bridge = AntigravityBridge()
 watcher = ConversationWatcher(bridge)
@@ -72,14 +77,23 @@ def is_user_allowed(user_id: int) -> bool:
 
 # Safe message sender
 async def safe_send_markdown(message: Message, text: str, reply_markup=None):
-    """Sends text splitting into chunks if needed, with markdown fallback."""
+    """Sends text splitting into chunks if needed, with markdown fallback and flood protection."""
     chunks = split_telegram_message(text)
     if not chunks:
         return
     for i, chunk in enumerate(chunks):
+        if i > 0:
+            await asyncio.sleep(0.5)
         markup = reply_markup if i == len(chunks) - 1 else None
         try:
             await message.answer(chunk, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+        except TelegramRetryAfter as e:
+            logger.warning(f"Flood limit exceeded on send, sleeping {e.retry_after}s...")
+            await asyncio.sleep(e.retry_after + 1)
+            try:
+                await message.answer(chunk, parse_mode=None, reply_markup=markup)
+            except Exception:
+                pass
         except TelegramBadRequest:
             await message.answer(chunk, parse_mode=None, reply_markup=markup)
 
@@ -119,8 +133,10 @@ def get_projects_keyboard(projects: list) -> InlineKeyboardMarkup:
     for p in projects:
         name = p["name"]
         pid = p["id"]
+        chat_cnt = p.get("chat_count", 0)
+        cnt_suffix = f" ({chat_cnt})" if chat_cnt else ""
         buttons.append([
-            InlineKeyboardButton(text=f"📁 {name}", callback_data=f"select_project:{pid}")
+            InlineKeyboardButton(text=f"📁 {name}{cnt_suffix}", callback_data=f"select_project:{pid}")
         ])
     buttons.append([
         InlineKeyboardButton(text="🔙 В главное меню", callback_data="btn_menu")
@@ -273,11 +289,14 @@ def get_chat_page_keyboard(conversation_id: str, page: int, total_pages: int, us
                 jump_row.append(InlineKeyboardButton(text=btn_txt, callback_data=f"chat_page:{conversation_id}:{p}"))
         keyboard.append(jump_row)
 
-    # 3. Actions: Refresh, Mode
-    keyboard.append([
+    # 3. Actions: Refresh, Mode (and Stop if RUNNING)
+    action_row = [
         InlineKeyboardButton(text="🔄 Обновить", callback_data=f"refresh_chat:{conversation_id}"),
         InlineKeyboardButton(text=mode_text, callback_data=f"toggle_mode:{conversation_id}"),
-    ])
+    ]
+    if bridge.get_chat_status(conversation_id) == "RUNNING":
+        action_row.insert(0, InlineKeyboardButton(text="🛑 Прервать", callback_data=f"stop_chat:{conversation_id}"))
+    keyboard.append(action_row)
     
     # 4. Navigation: back to chats, new chat, menu
     keyboard.append([
@@ -355,7 +374,7 @@ async def cmd_projects(message: Message):
         return
     logger.info(f"User {message.from_user.id} requested projects menu")
     projects = bridge.list_projects()
-    text = f"📁 *Проекты Antigravity* (всего: {len(projects)}):\nВыберите проект для просмотра диалогов:"
+    text = f"📁 *Проекты Antigravity* (по недавней активности, всего: {len(projects)}):\nВыберите проект для просмотра диалогов:"
     await message.answer(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_projects_keyboard(projects))
 
 @dp.message(Command("current"))
@@ -468,6 +487,47 @@ async def cmd_logs(message: Message):
     ])
     await message.answer(f"📜 *Последние логи бота:*\n\n```text\n{logs_content}\n```", parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
+@dp.message(Command("stop"))
+async def cmd_stop(message: Message):
+    if not is_user_allowed(message.from_user.id):
+        return
+    sess = get_user_session(message.from_user.id)
+    cid = sess.get("conversation_id")
+    if not cid:
+        await message.answer("⚠️ Нет активного выбранного диалога.")
+        return
+    chat_title = bridge.get_chat_title(cid)
+    status = bridge.get_chat_status(cid)
+    if status != "RUNNING" and cid not in active_cancellations:
+        await message.answer(f"ℹ️ В диалоге «{chat_title}» нет выполняющихся задач.")
+        return
+    
+    logger.info(f"User {message.from_user.id} requested /stop for chat {cid[:8]}...")
+    bridge.stop_chat(cid)
+    if cid in active_cancellations:
+        active_cancellations[cid].set()
+    await message.answer(f"⏹️ Выполнение в диалоге «{chat_title}» остановлено.")
+
+@dp.callback_query(F.data.startswith("stop_chat:"))
+async def cb_stop_chat(callback: CallbackQuery):
+    if not is_user_allowed(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    cid = callback.data.split(":", 1)[1]
+    chat_title = bridge.get_chat_title(cid)
+    logger.info(f"User {callback.from_user.id} clicked stop button for chat {cid[:8]}...")
+    bridge.stop_chat(cid)
+    if cid in active_cancellations:
+        active_cancellations[cid].set()
+    await callback.answer("⏹️ Выполнение остановлено!", show_alert=False)
+    try:
+        await callback.message.edit_text(
+            f"⏹️ *Выполнение в диалоге «{chat_title}» остановлено пользователем.*",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception:
+        pass
+
 # Callback query handlers
 @dp.callback_query(F.data == "btn_menu")
 async def cb_menu(callback: CallbackQuery, state: FSMContext):
@@ -505,7 +565,7 @@ async def cb_logs(callback: CallbackQuery):
 async def cb_projects(callback: CallbackQuery):
     logger.info(f"User {callback.from_user.id} clicked projects button")
     projects = bridge.list_projects()
-    text = f"📁 *Проекты Antigravity* (всего: {len(projects)}):\nВыберите проект:"
+    text = f"📁 *Проекты Antigravity* (по недавней активности, всего: {len(projects)}):\nВыберите проект:"
     await safe_edit_markdown(callback, text, reply_markup=get_projects_keyboard(projects))
 
 @dp.callback_query(F.data == "btn_all_chats")
@@ -727,20 +787,24 @@ async def cb_new_chat(callback: CallbackQuery, state: FSMContext):
     ])
     await safe_edit_markdown(callback, text, reply_markup=keyboard)
 
-# Handler for new chat prompt input
+# Handler for new chat prompt input (supports text and photo/document)
 @dp.message(BotStates.waiting_for_new_chat_prompt)
 async def process_new_chat_prompt(message: Message, state: FSMContext):
     if not is_user_allowed(message.from_user.id):
         return
 
-    prompt = message.text.strip()
-    if not prompt:
-        await message.answer("Пожалуйста, введите непустой запрос.")
+    prompt = (message.text or message.caption or "").strip()
+    has_image = bool(message.photo or (message.document and message.document.mime_type and message.document.mime_type.startswith("image/")))
+    
+    if not prompt and has_image:
+        prompt = "Посмотри на это изображение."
+    elif not prompt:
+        await message.answer("Пожалуйста, введите текстовый запрос или прикрепите изображение.")
         return
 
     await state.clear()
     sess = get_user_session(message.from_user.id)
-    logger.info(f"User {message.from_user.id} creating new conversation with prompt: {prompt[:60]}")
+    logger.info(f"User {message.from_user.id} creating new conversation with prompt: {prompt[:60]} (has_image={has_image})")
     
     wait_msg = await message.answer("🚀 *Создаю новый диалог в Antigravity...*", parse_mode=ParseMode.MARKDOWN)
     
@@ -749,7 +813,33 @@ async def process_new_chat_prompt(message: Message, state: FSMContext):
         cid = bridge.create_new_chat(prompt, title=title)
         sess["conversation_id"] = cid
         logger.info(f"Successfully created conversation {cid} for user {message.from_user.id}")
-        
+
+        if has_image:
+            file_id = None
+            ext = ".png"
+            mime_type = "image/png"
+            if message.photo:
+                photo = message.photo[-1]
+                file_id = photo.file_id
+                ext = ".jpg"
+                mime_type = "image/jpeg"
+            elif message.document:
+                file_id = message.document.file_id
+                mime_type = message.document.mime_type
+                if message.document.file_name:
+                    suffix = Path(message.document.file_name).suffix.lower()
+                    if suffix in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]:
+                        ext = suffix
+
+            if file_id:
+                file_obj = await message.bot.get_file(file_id)
+                bio = io.BytesIO()
+                await message.bot.download_file(file_obj.file_path, destination=bio)
+                img_bytes = bio.getvalue()
+                img_path = bridge.save_uploaded_image(cid, img_bytes, ext=ext)
+                img_payload = bridge.build_image_payload(img_path, img_bytes, mime_type=mime_type)
+                bridge.send_user_message(cid, prompt, images=[img_payload])
+
         await wait_msg.edit_text(
             f"✅ *Диалог создан!*\nID: `{cid[:8]}...`\n⏳ Ожидаю первый ответ агента...",
             parse_mode=ParseMode.MARKDOWN
@@ -780,44 +870,45 @@ async def process_new_chat_prompt(message: Message, state: FSMContext):
         logger.exception(f"Error creating chat: {e}")
         await wait_msg.edit_text(f"❌ Ошибка создания диалога:\n`{e}`", parse_mode=ParseMode.MARKDOWN)
 
-# Main Message Router: Forward text to Antigravity active chat!
-@dp.message(~StateFilter(BotStates.waiting_for_new_chat_prompt), F.text)
-async def handle_user_chat_message(message: Message, state: FSMContext):
-    if not is_user_allowed(message.from_user.id):
-        return
 
-    sess = get_user_session(message.from_user.id)
-    cid = sess.get("conversation_id")
-    
-    if not cid:
-        text = (
-            "⚠️ *Активный чат не выбран!*\n\n"
-            "Чтобы отправить сообщение агенту, сначала выберите существующий чат или создайте новый через меню ниже:"
-        )
-        await message.answer(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu_keyboard(message.from_user.id))
-        return
-
-    user_text = message.text.strip()
-    chat_title = bridge.get_chat_title(cid)
-    logger.info(f"Forwarding message from user {message.from_user.id} to Antigravity chat {cid[:8]}... ('{chat_title}'): {user_text[:60]}")
-    
+async def _run_message_flow(
+    message: Message,
+    cid: str,
+    user_text: str,
+    chat_title: str,
+    sess: dict,
+    images: Optional[List[Dict[str, Any]]] = None,
+    intro_text: Optional[str] = None
+):
+    """Common pipeline to send text/images to Antigravity, track progress, and send paginated response."""
     initial_steps = bridge.get_transcript_step_count(cid)
     
+    status_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🛑 Прервать выполнение", callback_data=f"stop_chat:{cid}")]]
+    )
+    status_prompt = intro_text or (
+        f"⏳ *Отправлено в диалог:* «{chat_title}»\n🧠 *Antigravity думает и выполняет задачу...*"
+    )
     status_msg = await message.answer(
-        f"⏳ *Отправлено в диалог:* «{chat_title}»\n🧠 *Antigravity думает и выполняет задачу...*",
-        parse_mode=ParseMode.MARKDOWN
+        status_prompt,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=status_keyboard
     )
     
     try:
-        bridge.send_user_message(cid, user_text)
+        bridge.send_user_message(cid, user_text, images=images)
     except Exception as e:
         logger.exception(f"Failed to send message: {e}")
-        await status_msg.edit_text(f"❌ Ошибка отправки сообщения в Antigravity:\n`{e}`", parse_mode=ParseMode.MARKDOWN)
+        await status_msg.edit_text(f"❌ Ошибка отправки в Antigravity:\n`{e}`", parse_mode=ParseMode.MARKDOWN)
         return
 
     async def on_progress(p_text: str):
         try:
-            await status_msg.edit_text(f"⏳ *Antigravity:* «{chat_title}»\n{p_text}", parse_mode=ParseMode.MARKDOWN)
+            await status_msg.edit_text(
+                f"⏳ *Antigravity:* «{chat_title}»\n{p_text}",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=status_keyboard
+            )
         except Exception:
             pass
 
@@ -830,16 +921,20 @@ async def handle_user_chat_message(message: Message, state: FSMContext):
             await asyncio.sleep(4.0)
 
     typing_task = asyncio.create_task(send_typing_loop())
+    cancel_event = asyncio.Event()
+    active_cancellations[cid] = cancel_event
     
     try:
         reply = await watcher.wait_for_response(
             conversation_id=cid,
             initial_step_count=initial_steps,
             on_progress=on_progress,
-            timeout=400
+            timeout=400,
+            cancel_event=cancel_event
         )
     finally:
         typing_task.cancel()
+        active_cancellations.pop(cid, None)
 
     try:
         await status_msg.delete()
@@ -854,7 +949,13 @@ async def handle_user_chat_message(message: Message, state: FSMContext):
     is_tr = len("\n\n".join(m["text"] for m in last_turn.get("assistant", []))) > 2500
     keyboard = get_chat_page_keyboard(cid, total_pages, total_pages, message.from_user.id, is_truncated=is_tr)
 
-    if reply:
+    if reply == "__STOPPED__":
+        await message.answer(
+            f"⏹️ *Выполнение в диалоге «{chat_title}» остановлено.*",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+    elif reply:
         logger.info(f"Delivering response to user {message.from_user.id} ({len(reply)} chars)")
         await safe_send_markdown(
             message,
@@ -875,6 +976,99 @@ async def handle_user_chat_message(message: Message, state: FSMContext):
             reply_markup=keyboard
         )
 
+
+# Main Message Router: Forward text to Antigravity active chat!
+@dp.message(~StateFilter(BotStates.waiting_for_new_chat_prompt), F.text)
+async def handle_user_chat_message(message: Message, state: FSMContext):
+    if not is_user_allowed(message.from_user.id):
+        return
+
+    sess = get_user_session(message.from_user.id)
+    cid = sess.get("conversation_id")
+    
+    if not cid:
+        text = (
+            "⚠️ *Активный чат не выбран!*\n\n"
+            "Чтобы отправить сообщение агенту, сначала выберите существующий чат или создайте новый через меню ниже:"
+        )
+        await message.answer(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu_keyboard(message.from_user.id))
+        return
+
+    user_text = message.text.strip()
+    chat_title = bridge.get_chat_title(cid)
+    logger.info(f"Forwarding message from user {message.from_user.id} to Antigravity chat {cid[:8]}... ('{chat_title}'): {user_text[:60]}")
+    await _run_message_flow(message, cid, user_text, chat_title, sess)
+
+
+# Main Message Router: Forward photo / image to Antigravity active chat!
+@dp.message(~StateFilter(BotStates.waiting_for_new_chat_prompt), F.photo | F.document)
+async def handle_user_image_message(message: Message, state: FSMContext):
+    if not is_user_allowed(message.from_user.id):
+        return
+
+    sess = get_user_session(message.from_user.id)
+    cid = sess.get("conversation_id")
+    
+    if not cid:
+        text = (
+            "⚠️ *Активный чат не выбран!*\n\n"
+            "Чтобы отправить изображение агенту, сначала выберите существующий чат или создайте новый через меню ниже:"
+        )
+        await message.answer(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu_keyboard(message.from_user.id))
+        return
+
+    file_id = None
+    ext = ".png"
+    mime_type = "image/png"
+
+    if message.photo:
+        photo = message.photo[-1]
+        file_id = photo.file_id
+        ext = ".jpg"
+        mime_type = "image/jpeg"
+    elif message.document:
+        doc = message.document
+        if not (doc.mime_type and doc.mime_type.startswith("image/")):
+            await message.answer("⚠️ Поддерживается отправка только изображений (JPG, PNG, WEBP).")
+            return
+        file_id = doc.file_id
+        mime_type = doc.mime_type
+        if doc.file_name:
+            suffix = Path(doc.file_name).suffix.lower()
+            if suffix in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]:
+                ext = suffix
+
+    if not file_id:
+        return
+
+    chat_title = bridge.get_chat_title(cid)
+    caption = (message.caption or "").strip() or "Посмотри на прикрепленное изображение."
+    logger.info(f"Forwarding image from user {message.from_user.id} to Antigravity chat {cid[:8]}... ('{chat_title}'): caption='{caption[:50]}'")
+
+    # Download image from Telegram into memory
+    try:
+        file_obj = await message.bot.get_file(file_id)
+        bio = io.BytesIO()
+        await message.bot.download_file(file_obj.file_path, destination=bio)
+        image_bytes = bio.getvalue()
+        img_path = bridge.save_uploaded_image(cid, image_bytes, ext=ext)
+        img_payload = bridge.build_image_payload(img_path, image_bytes, mime_type=mime_type)
+    except Exception as e:
+        logger.exception(f"Failed to download/process image: {e}")
+        await message.answer(f"❌ Ошибка обработки изображения:\n`{e}`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    intro = f"🖼 *Изображение загружено в диалог:* «{chat_title}»\n🧠 *Antigravity начинает анализ изображения...*"
+    await _run_message_flow(
+        message=message,
+        cid=cid,
+        user_text=caption,
+        chat_title=chat_title,
+        sess=sess,
+        images=[img_payload],
+        intro_text=intro
+    )
+
 async def start_bot():
     token = config.get_bot_token()
     if not token:
@@ -893,6 +1087,7 @@ async def start_bot():
             BotCommand(command="projects", description="📁 Список проектов"),
             BotCommand(command="chats", description="💬 Все чаты / диалоги"),
             BotCommand(command="current", description="📌 Открыть активный чат"),
+            BotCommand(command="stop", description="🛑 Остановить текущее действие"),
             BotCommand(command="newchat", description="➕ Создать новый чат"),
             BotCommand(command="status", description="📊 Статус Antigravity"),
             BotCommand(command="logs", description="📜 Системные логи бота"),
@@ -904,7 +1099,15 @@ async def start_bot():
 
         print(f"\n🚀 Бот @{bot_info.username} успешно запущен и готов к работе!")
         print(f"Откройте в Telegram: https://t.me/{bot_info.username}\n")
-        await dp.start_polling(bot)
+        while True:
+            try:
+                await dp.start_polling(bot)
+                break
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                break
+            except Exception as e:
+                logger.error(f"Polling error: {e}. Retrying in 5 seconds...")
+                await asyncio.sleep(5)
     finally:
         await bot.session.close()
 

@@ -3,6 +3,7 @@ import re
 import json
 import ssl
 import time
+import base64
 import logging
 import urllib.request
 import urllib.error
@@ -144,8 +145,8 @@ class AntigravityBridge:
             logger.error(f"Connect-RPC error {e.code} for method {method}: {err_body}")
             raise RuntimeError(f"Connect-RPC error {e.code}: {err_body}")
 
-    def list_projects(self) -> List[Dict[str, Any]]:
-        """Return list of all configured projects."""
+    def _load_projects_raw(self) -> List[Dict[str, Any]]:
+        """Return list of all configured projects from disk without chat-based recency sorting."""
         projects = []
         if not ANTIGRAVITY_PROJECTS_DIR.exists():
             return projects
@@ -165,27 +166,64 @@ class AntigravityBridge:
                             unquoted = urllib.parse.unquote(uri).lower().rstrip('/')
                             normalized_folders.append(unquoted)
 
+                    mtime = pfile.stat().st_mtime
                     projects.append({
                         "id": pid,
                         "name": name,
                         "folders": folders,
                         "normalized_folders": normalized_folders,
-                        "file": str(pfile)
+                        "file": str(pfile),
+                        "file_mtime": mtime,
+                        "last_active": mtime,
+                        "chat_count": 0
                     })
             except Exception as e:
                 logger.error(f"Error reading project file {pfile}: {e}")
 
         # Add Outside of Project fallback
         if not any(p["id"] == "outside-of-project" for p in projects):
+            outside_file = ANTIGRAVITY_PROJECTS_DIR / "outside-of-project.json"
+            mtime = outside_file.stat().st_mtime if outside_file.exists() else 0
             projects.append({
                 "id": "outside-of-project",
-                "name": "Outside of Project (Р’РЅРµ РїСЂРѕРµРєС‚РѕРІ)",
+                "name": "Outside of Project (Вне проектов)",
                 "folders": [],
                 "normalized_folders": [],
-                "file": ""
+                "file": str(outside_file) if outside_file.exists() else "",
+                "file_mtime": mtime,
+                "last_active": mtime,
+                "chat_count": 0
             })
 
-        projects.sort(key=lambda x: x["name"].lower())
+        return projects
+
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """Return list of all configured projects ordered by recency of usage (as in Antigravity)."""
+        projects = self._load_projects_raw()
+
+        # Update last_active timestamp and chat_count from chats
+        try:
+            chats = self.list_chats()
+            proj_last_chat = {}
+            proj_chat_count = {}
+            for c in chats:
+                pid = c.get("project_id")
+                upd = c.get("updated_at", 0)
+                if pid:
+                    if upd > proj_last_chat.get(pid, 0):
+                        proj_last_chat[pid] = upd
+                    proj_chat_count[pid] = proj_chat_count.get(pid, 0) + 1
+
+            for p in projects:
+                pid = p["id"]
+                chat_upd = proj_last_chat.get(pid, 0)
+                p["last_active"] = max(p.get("file_mtime", 0), chat_upd)
+                p["chat_count"] = proj_chat_count.get(pid, 0)
+        except Exception as e:
+            logger.debug(f"Could not compute chat recency for projects: {e}")
+
+        # Sort projects by most recently active first (descending)
+        projects.sort(key=lambda x: x.get("last_active", 0), reverse=True)
         return projects
 
     def get_transcript_path(self, conversation_id: str, prefer_full: bool = True) -> Path:
@@ -206,7 +244,7 @@ class AntigravityBridge:
         List all chats/conversations. If project_id is given, filter for that project.
         Extracts title, status, step_count, last_modified_time.
         """
-        all_projects = self.list_projects()
+        all_projects = self._load_projects_raw()
         projects_by_id = {p["id"]: p for p in all_projects}
 
         # 1. Fetch active summaries from RPC
@@ -541,12 +579,57 @@ class AntigravityBridge:
             logger.debug(f"Error checking language_server.log: {e}")
         return None
 
-    def send_user_message(self, conversation_id: str, text: str) -> bool:
+    def save_uploaded_image(
+        self,
+        conversation_id: str,
+        image_bytes: bytes,
+        filename: Optional[str] = None,
+        ext: str = ".png"
+    ) -> Path:
+        """
+        Save an uploaded image to native Antigravity brain storage:
+        <ANTIGRAVITY_BRAIN_DIR>/<conversation_id>/.user_uploaded/media_<timestamp><ext>
+        """
+        target_dir = ANTIGRAVITY_BRAIN_DIR / conversation_id / ".user_uploaded"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if not filename:
+            timestamp_ms = int(time.time() * 1000)
+            if not ext.startswith("."):
+                ext = f".{ext}"
+            filename = f"media_{timestamp_ms}{ext}"
+        target_path = target_dir / filename
+        with open(target_path, "wb") as f:
+            f.write(image_bytes)
+        logger.info(f"Saved uploaded image for chat {conversation_id[:8]} at {target_path}")
+        return target_path
+
+    def build_image_payload(
+        self,
+        image_path: Path,
+        image_bytes: bytes,
+        mime_type: str = "image/png"
+    ) -> Dict[str, Any]:
+        """
+        Build Antigravity ImageData dictionary for SendUserCascadeMessage RPC.
+        """
+        return {
+            "base64Data": base64.b64encode(image_bytes).decode("ascii"),
+            "mimeType": mime_type,
+            "uri": image_path.as_uri()
+        }
+
+    def send_user_message(
+        self,
+        conversation_id: str,
+        text: str,
+        images: Optional[List[Dict[str, Any]]] = None
+    ) -> bool:
         """
         Send a user message directly to Antigravity conversation via SendUserCascadeMessage RPC.
+        Supports text and optional list of images (ImageData).
         Antigravity will wake up, process the message, and run its agent.
         """
-        logger.info(f"Sending message to conversation {conversation_id[:8]}...: {text[:60]}")
+        logger.info(f"Sending message to conversation {conversation_id[:8]}...: {text[:60]} (images={len(images) if images else 0})")
         model_obj = self._resolve_model_config(conversation_id)
         payload = {
             "metadata": {
@@ -565,6 +648,8 @@ class AntigravityBridge:
                 "applyModelDefaultOverride": True
             }
         }
+        if images:
+            payload["images"] = images
         res = self._rpc_call("SendUserCascadeMessage", payload)
         logger.info(f"Message sent successfully to {conversation_id[:8]}...")
         return res is not None
@@ -592,7 +677,7 @@ class AntigravityBridge:
         if res.returncode != 0:
             err_msg = res.stderr or res.stdout
             logger.error(f"Failed to create conversation (exit code {res.returncode}): {err_msg}")
-            raise RuntimeError(f"РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ РґРёР°Р»РѕРіР°: {err_msg}")
+            raise RuntimeError(f"Ошибка создания диалога: {err_msg}")
 
         try:
             data = json.loads(res.stdout)
@@ -611,7 +696,7 @@ class AntigravityBridge:
             logger.info(f"Determined new conversation ID from latest DB: {cid}")
             return cid
 
-        raise RuntimeError("Р”РёР°Р»РѕРі СЃРѕР·РґР°РЅ, РЅРѕ РЅРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РµРіРѕ ID.")
+        raise RuntimeError("Диалог создан, но не удалось получить его ID.")
 
     def get_chat_status(self, conversation_id: str) -> str:
         """Check if chat is RUNNING or IDLE."""
@@ -627,3 +712,14 @@ class AntigravityBridge:
         except Exception:
             pass
         return "IDLE"
+
+    def stop_chat(self, conversation_id: str) -> bool:
+        """Force stop a running conversation in Antigravity."""
+        try:
+            resp = self._rpc_call("ForceStopCascadeTree", {"conversation_id": conversation_id})
+            stopped = resp.get("stoppedConversationIds", [])
+            logger.info(f"ForceStopCascadeTree for {conversation_id[:8]}... stopped: {stopped}")
+            return bool(stopped)
+        except Exception as e:
+            logger.error(f"Failed to stop chat {conversation_id}: {e}")
+            return False

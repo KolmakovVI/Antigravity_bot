@@ -1,0 +1,295 @@
+{
+  "communities": {
+    "0": [
+      "bot",
+      "bot_build_chat_pages",
+      "bot_cb_all_chats",
+      "bot_cb_chat_page",
+      "bot_cb_dl_step",
+      "bot_cb_new_chat",
+      "bot_cb_open_chat",
+      "bot_cb_page_info",
+      "bot_cb_projects",
+      "bot_cb_read_full",
+      "bot_cb_select_project",
+      "bot_cb_status",
+      "bot_cb_stop_chat",
+      "bot_cb_toggle_mode",
+      "bot_format_chat_page",
+      "bot_get_chat_page_keyboard",
+      "bot_get_chats_keyboard",
+      "bot_process_new_chat_prompt",
+      "bot_rationale_167",
+      "bot_rationale_80",
+      "bot_safe_edit_markdown",
+      "bot_safe_send_markdown",
+      "callback_query",
+      "callbackquery"
+    ],
+    "1": [
+      "bot_cb_menu",
+      "bot_cmd_chats",
+      "bot_cmd_current",
+      "bot_cmd_help",
+      "bot_cmd_menu",
+      "bot_cmd_newchat_cmd",
+      "bot_cmd_projects",
+      "bot_cmd_start",
+      "bot_cmd_status",
+      "bot_cmd_stop",
+      "bot_get_main_menu_keyboard",
+      "bot_get_user_session",
+      "bot_handle_user_chat_message",
+      "bot_handle_user_image_message",
+      "bot_is_user_allowed",
+      "bot_py_any",
+      "bot_rationale_883",
+      "bot_run_message_flow",
+      "fsmcontext",
+      "message"
+    ],
+    "2": [
+      "bot_start_bot",
+      "config",
+      "config_add_allowed_user_id",
+      "config_get_allowed_user_ids",
+      "config_get_api_hash",
+      "config_get_api_id",
+      "config_get_bot_token",
+      "config_get_phone",
+      "config_get_session_path",
+      "config_is_configured",
+      "config_rationale_66",
+      "config_reload_env",
+      "config_set_env_variable",
+      "run_bot",
+      "run_bot_main"
+    ],
+    "3": [
+      "bot_botstates",
+      "bridge",
+      "bridge_antigravitybridge",
+      "bridge_antigravitybridge_create_new_chat",
+      "bridge_antigravitybridge_get_recent_antigravity_error",
+      "bridge_antigravitybridge_init",
+      "bridge_rationale_559",
+      "bridge_rationale_658",
+      "statesgroup",
+      "test_bot_bridge",
+      "watcher",
+      "watcher_conversationwatcher",
+      "watcher_conversationwatcher_init"
+    ],
+    "4": [
+      "bridge_antigravitybridge_detect_connection",
+      "bridge_antigravitybridge_get_chat_status",
+      "bridge_antigravitybridge_resolve_model_config",
+      "bridge_antigravitybridge_rpc_call",
+      "bridge_antigravitybridge_send_user_message",
+      "bridge_antigravitybridge_stop_chat",
+      "bridge_antigravitybridge_test_connection",
+      "bridge_rationale_117",
+      "bridge_rationale_36",
+      "bridge_rationale_524",
+      "bridge_rationale_627",
+      "bridge_rationale_702",
+      "bridge_rationale_717"
+    ],
+    "5": [
+      "bridge_antigravitybridge_get_chat_history",
+      "bridge_antigravitybridge_get_chat_title",
+      "bridge_antigravitybridge_get_transcript_path",
+      "bridge_antigravitybridge_get_transcript_step_count",
+      "bridge_antigravitybridge_save_uploaded_image",
+      "bridge_rationale_230",
+      "bridge_rationale_399",
+      "bridge_rationale_443",
+      "bridge_rationale_513",
+      "bridge_rationale_589",
+      "path"
+    ],
+    "6": [
+      "test_bot_bridge_testantigravitybotbridge",
+      "test_bot_bridge_testantigravitybotbridge_setup",
+      "test_bot_bridge_testantigravitybotbridge_test_detection",
+      "test_bot_bridge_testantigravitybotbridge_test_get_chat_history",
+      "test_bot_bridge_testantigravitybotbridge_test_image_helpers",
+      "test_bot_bridge_testantigravitybotbridge_test_list_chats",
+      "test_bot_bridge_testantigravitybotbridge_test_list_projects",
+      "test_bot_bridge_testantigravitybotbridge_test_split_telegram_message_code_block",
+      "test_bot_bridge_testantigravitybotbridge_test_split_telegram_message_normal",
+      "watcher_rationale_11",
+      "watcher_split_telegram_message"
+    ],
+    "7": [
+      "bot_cb_logs",
+      "bot_cmd_logs",
+      "bot_get_projects_keyboard",
+      "inlinekeyboardmarkup",
+      "log_config",
+      "log_config_get_recent_logs",
+      "log_config_rationale_42",
+      "log_config_rationale_9",
+      "log_config_setup_logging"
+    ],
+    "8": [
+      "bridge_antigravitybridge_build_image_payload",
+      "bridge_antigravitybridge_list_chats",
+      "bridge_antigravitybridge_list_projects",
+      "bridge_antigravitybridge_load_projects_raw",
+      "bridge_py_any",
+      "bridge_rationale_149",
+      "bridge_rationale_201",
+      "bridge_rationale_243",
+      "bridge_rationale_612"
+    ],
+    "9": [
+      "event",
+      "watcher_conversationwatcher_wait_for_response",
+      "watcher_rationale_88"
+    ]
+  },
+  "cohesion": {
+    "0": 0.2572463768115942,
+    "1": 0.26842105263157895,
+    "2": 0.26666666666666666,
+    "3": 0.23076923076923078,
+    "4": 0.1794871794871795,
+    "5": 0.18181818181818182,
+    "6": 0.2,
+    "7": 0.25,
+    "8": 0.3055555555555556,
+    "9": 0.6666666666666666
+  },
+  "gods": [
+    {
+      "id": "bridge_antigravitybridge",
+      "label": "AntigravityBridge",
+      "degree": 30
+    },
+    {
+      "id": "bot_get_user_session",
+      "label": "get_user_session()",
+      "degree": 23
+    },
+    {
+      "id": "bot_is_user_allowed",
+      "label": "is_user_allowed()",
+      "degree": 17
+    },
+    {
+      "id": "bot_safe_edit_markdown",
+      "label": "safe_edit_markdown()",
+      "degree": 11
+    },
+    {
+      "id": "bot_get_main_menu_keyboard",
+      "label": "get_main_menu_keyboard()",
+      "degree": 11
+    },
+    {
+      "id": "bot_build_chat_pages",
+      "label": "build_chat_pages()",
+      "degree": 10
+    },
+    {
+      "id": "bot_run_message_flow",
+      "label": "_run_message_flow()",
+      "degree": 10
+    },
+    {
+      "id": "test_bot_bridge_testantigravitybotbridge",
+      "label": "TestAntigravityBotBridge",
+      "degree": 10
+    },
+    {
+      "id": "bot_get_chat_page_keyboard",
+      "label": "get_chat_page_keyboard()",
+      "degree": 9
+    },
+    {
+      "id": "bot_process_new_chat_prompt",
+      "label": "process_new_chat_prompt()",
+      "degree": 9
+    }
+  ],
+  "surprises": [
+    {
+      "source": "TestAntigravityBotBridge",
+      "target": "AntigravityBridge",
+      "source_files": [
+        "test_bot_bridge.py",
+        "bridge.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "BotStates",
+      "target": "AntigravityBridge",
+      "source_files": [
+        "bot.py",
+        "bridge.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories"
+    },
+    {
+      "source": "BotStates",
+      "target": "ConversationWatcher",
+      "source_files": [
+        "bot.py",
+        "watcher.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories"
+    },
+    {
+      "source": "is_user_allowed()",
+      "target": "add_allowed_user_id()",
+      "source_files": [
+        "bot.py",
+        "config.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "is_user_allowed()",
+      "target": "get_allowed_user_ids()",
+      "source_files": [
+        "bot.py",
+        "config.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; bridges separate communities"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `AntigravityBridge` connect `AntigravityBridge` to `bot.py`, `config.py`, `._rpc_call`, `.get_transcript_path`, `TestAntigravityBotBridge`, `.list_chats`?",
+      "why": "High betweenness centrality (0.539) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `TestAntigravityBotBridge` connect `TestAntigravityBotBridge` to `AntigravityBridge`?",
+      "why": "High betweenness centrality (0.089) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `ConversationWatcher` connect `AntigravityBridge` to `bot.py`, `.wait_for_response`?",
+      "why": "High betweenness centrality (0.050) - this node is a cross-community bridge."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 3 inferred relationships involving `AntigravityBridge` (e.g. with `BotStates` and `TestAntigravityBotBridge`) actually correct?",
+      "why": "`AntigravityBridge` has 3 INFERRED edges - model-reasoned connections that need verification."
+    }
+  ]
+}
